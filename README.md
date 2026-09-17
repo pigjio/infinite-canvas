@@ -164,6 +164,19 @@ docker compose up -d
 
 点击链接加入群聊【开源无限画布(2群)】：https://qm.qq.com/q/HRt2kUnYiG
 
+## 关于本仓库（教学修改版）
+
+本仓库基于 [@basketikun](https://github.com/basketikun) 的 [infinite-canvas](https://github.com/basketikun/infinite-canvas)（MIT License）修改，用于课堂教学。
+
+在原版基础上的主要改动：
+
+- 新增 ModelHub（api.modelhub.cc）视频生成协议，并预置为默认渠道
+- 新增韩文（한국어）界面
+- 新增成品文件夹：生成的图片和视频自动另存到本机目录
+- 复制节点保留上游参考连线；Delete/Backspace 可删除选中节点
+
+修改部分同样以 MIT 协议开源，感谢原作者的贡献。
+
 ## 开源协议
 
 本项目使用 [MIT License](LICENSE)。任何人都可以免费使用、复制、修改、分发、再授权和商业使用本项目，也可以用于闭源产品。
