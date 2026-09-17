@@ -1,9 +1,10 @@
-import { Alert, Button, Progress, Spin } from "antd";
+import { Alert, Button, Progress, Spin, Switch } from "antd";
 import type { TFunction } from "i18next";
-import { Database, HardDrive, Layers3, RefreshCw } from "lucide-react";
+import { Database, FolderOpen, HardDrive, Layers3, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
+import { getOutputFolderName, getOutputFolderPermission, getOutputFolderSettings, isOutputFolderSupported, pickOutputFolder, removeOutputFolder, requestOutputFolderPermission, setOutputFolderAutoSave } from "@/lib/external-folder";
 import { readLocalStorageUsage, type LocalStorageUsage } from "@/services/local-storage-usage";
 
 const storeLabelKeys: Record<string, string> = {
@@ -21,6 +22,48 @@ export function ConfigLocalStorage({ active }: { active: boolean }) {
     const [usage, setUsage] = useState<LocalStorageUsage | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
+    const [folderName, setFolderName] = useState("");
+    const [folderPermission, setFolderPermission] = useState<PermissionState | "unavailable">("unavailable");
+    const [folderAutoSave, setFolderAutoSave] = useState(true);
+    const [folderHint, setFolderHint] = useState("");
+
+    const refreshFolder = useCallback(async () => {
+        setFolderName(await getOutputFolderName());
+        setFolderPermission(await getOutputFolderPermission());
+        setFolderAutoSave((await getOutputFolderSettings()).autoSave);
+    }, []);
+
+    useEffect(() => {
+        if (active) void refreshFolder();
+    }, [active, refreshFolder]);
+
+    const handlePickFolder = useCallback(async () => {
+        setFolderHint("");
+        try {
+            await pickOutputFolder();
+            await refreshFolder();
+        } catch (reason) {
+            if (reason instanceof DOMException && reason.name === "AbortError") return;
+            setFolderHint(reason instanceof Error && reason.message === "not-supported" ? t("config.outputFolder.unsupported") : t("config.outputFolder.pickFailed"));
+        }
+    }, [refreshFolder, t]);
+
+    const handleReconnectFolder = useCallback(async () => {
+        const granted = await requestOutputFolderPermission();
+        setFolderHint(granted ? "" : t("config.outputFolder.permissionDenied"));
+        await refreshFolder();
+    }, [refreshFolder, t]);
+
+    const handleRemoveFolder = useCallback(async () => {
+        await removeOutputFolder();
+        setFolderHint("");
+        await refreshFolder();
+    }, [refreshFolder]);
+
+    const handleAutoSaveChange = useCallback(async (value: boolean) => {
+        await setOutputFolderAutoSave(value);
+        setFolderAutoSave(value);
+    }, []);
 
     const refresh = useCallback(async () => {
         setLoading(true);
@@ -43,6 +86,32 @@ export function ConfigLocalStorage({ active }: { active: boolean }) {
 
     return (
         <div className="space-y-3">
+            <section className="rounded-lg border border-stone-200 p-4 dark:border-stone-800">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <div className="flex items-center gap-2 text-sm font-semibold">
+                            <FolderOpen className="size-4" />
+                            {t("config.outputFolder.title")}
+                        </div>
+                        <div className="mt-1 text-xs text-stone-500">{t("config.outputFolder.description")}</div>
+                    </div>
+                    <Switch checked={folderAutoSave} disabled={!isOutputFolderSupported() || !folderName} onChange={(value) => void handleAutoSaveChange(value)} />
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium">{folderName || t("config.outputFolder.none")}</span>
+                    <Button size="small" icon={<FolderOpen className="size-4" />} disabled={!isOutputFolderSupported()} onClick={() => void handlePickFolder()}>
+                        {t("config.outputFolder.pick")}
+                    </Button>
+                    {folderName && folderPermission !== "granted" ? (
+                        <Button size="small" onClick={() => void handleReconnectFolder()}>{t("config.outputFolder.reconnect")}</Button>
+                    ) : null}
+                    {folderName ? (
+                        <Button size="small" danger onClick={() => void handleRemoveFolder()}>{t("config.outputFolder.remove")}</Button>
+                    ) : null}
+                </div>
+                {folderHint ? <div className="mt-2 text-xs text-stone-500">{folderHint}</div> : null}
+                {!isOutputFolderSupported() ? <Alert className="mt-2" type="warning" showIcon message={t("config.outputFolder.unsupported")} /> : null}
+            </section>
             <section className="rounded-lg border border-stone-200 p-4 dark:border-stone-800">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>

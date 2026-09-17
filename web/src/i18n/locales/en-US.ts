@@ -393,6 +393,7 @@ export default {
             missingUrl: "Enter the local proxy address first.",
             unreachable: "Local proxy is unreachable. Make sure the command is running and the address is correct.",
         },
+        outputFolder: { title: "Output folder", description: "Automatically save generated images and videos to a local folder. Canvas data stays in the browser", pick: "Choose folder", remove: "Remove", none: "No folder selected", reconnect: "Re-authorize", autoSave: "Auto-save new outputs", unsupported: "This browser doesn't support folder access. Please use Chrome or Edge", permissionDenied: "Permission not granted. Please retry", pickFailed: "Failed to choose the folder. Please retry" },
         localStorage: {
             title: "IndexedDB storage usage",
             description: "View browser data saved by Infinite Canvas, grouped by object store.",
@@ -653,5 +654,6 @@ export default {
     locale: {
         zhCN: "简体中文",
         enUS: "English",
+        koKR: "한국어",
     },
 };

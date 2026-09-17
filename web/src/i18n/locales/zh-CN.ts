@@ -393,6 +393,7 @@ export default {
             missingUrl: "请先填写本地代理地址。",
             unreachable: "无法连接本地代理，请确认命令已启动且地址填写正确。",
         },
+        outputFolder: { title: "成品文件夹", description: "生成的图片和视频自动另存到本机文件夹，画布数据仍保留在浏览器", pick: "选择文件夹", remove: "移除", none: "未选择文件夹", reconnect: "重新授权", autoSave: "自动保存新成品", unsupported: "当前浏览器不支持文件夹访问，请使用 Chrome 或 Edge", permissionDenied: "授权未通过，请重试", pickFailed: "选择文件夹失败，请重试" },
         localStorage: {
             title: "IndexedDB 存储使用情况",
             description: "查看 Infinite Canvas 在浏览器中保存的数据量，并按对象仓库统计内容体积。",
@@ -653,5 +654,6 @@ export default {
     locale: {
         zhCN: "简体中文",
         enUS: "English",
+        koKR: "한국어",
     },
 };

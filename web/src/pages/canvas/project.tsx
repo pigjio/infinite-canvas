@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
+import { saveToOutputFolder } from "@/lib/external-folder";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { uploadImage } from "@/services/image-storage";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
@@ -100,6 +101,7 @@ registerBuiltinNodes();
 type CanvasClipboard = {
     nodes: CanvasNodeData[];
     connections: CanvasConnection[];
+    externalIncoming?: CanvasConnection[];
 };
 
 type ConnectionDropTarget = {
@@ -306,7 +308,7 @@ function InfiniteCanvasPage() {
         async (nodeId: string, config: Parameters<typeof buildGenerationConfig>[0], prompt: string, images: Parameters<typeof createVideoGenerationTask>[2], signal: AbortSignal, extra: CanvasNodeData["metadata"] = {}, videos: ReferenceVideo[] = [], audios: ReferenceAudio[] = []) => {
             const task = await createVideoGenerationTask(config, prompt, images, { signal, videos, audios });
             if (task.provider !== "plugin") {
-                setNodes((prev) => prev.map((item) => (item.id === nodeId ? { ...item, metadata: { ...item.metadata, videoTaskId: task.id, videoTaskProvider: task.provider === "gemini" ? "gemini" : "openai", model: config.model } } : item)));
+                setNodes((prev) => prev.map((item) => (item.id === nodeId ? { ...item, metadata: { ...item.metadata, videoTaskId: task.id, videoTaskProvider: task.provider === "gemini" || task.provider === "modelhub" ? task.provider : "openai", model: config.model } } : item)));
             }
             const video = await storeGeneratedVideo(await waitForVideoGenerationTask(config, task, { signal }));
             setNodes((prev) => prev.map((item) => (item.id === nodeId ? applyGeneratedVideo(item, video, { prompt, model: config.model, ...extra }) : item)));
@@ -333,7 +335,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(node.id);
                 setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } } : item)));
                 controller = startGenerationRequest(node.id, node.id, node.id);
-                const video = await storeGeneratedVideo(await waitForVideoGenerationTask(generationConfig, { id: taskId, provider: node.metadata?.videoTaskProvider === "gemini" ? "gemini" : "openai", model: generationConfig.model }, { signal: controller.signal }));
+                const video = await storeGeneratedVideo(await waitForVideoGenerationTask(generationConfig, { id: taskId, provider: node.metadata?.videoTaskProvider === "gemini" ? "gemini" : node.metadata?.videoTaskProvider === "modelhub" ? "modelhub" : "openai", model: generationConfig.model }, { signal: controller.signal }));
                 setNodes((prev) =>
                     prev.map((item) =>
                         item.id === node.id
@@ -969,7 +971,17 @@ function InfiniteCanvasPage() {
             position: { x: source.position.x + 36, y: source.position.y + 36 },
         };
 
+        // 复制节点时保留上游连线：新节点连到原来的上游节点（如视频节点的参考图）
+        const incomingConnections = connectionsRef.current
+            .filter((connection) => connection.toNodeId === nodeId)
+            .map((connection, index) => ({
+                ...connection,
+                id: `conn-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+                toNodeId: id,
+            }));
+
         setNodes((prev) => [...prev, next]);
+        if (incomingConnections.length) setConnections((prev) => [...prev, ...incomingConnections]);
         setSelectedNodeIds(new Set([id]));
         setSelectedConnectionId(null);
         if (next.type !== CanvasNodeType.Group) setDialogNodeId(id);
@@ -992,6 +1004,8 @@ function InfiniteCanvasPage() {
         clipboardRef.current = {
             nodes: copiedNodes,
             connections: connectionsRef.current.filter((connection) => selectedIds.has(connection.fromNodeId) && selectedIds.has(connection.toNodeId)).map((connection) => ({ ...connection })),
+            // 选区外的上游连线（如图片 → 视频节点）：粘贴时若上游节点仍存在则自动重连
+            externalIncoming: connectionsRef.current.filter((connection) => selectedIds.has(connection.toNodeId) && !selectedIds.has(connection.fromNodeId)).map((connection) => ({ ...connection })),
         };
     }, []);
 
@@ -1047,8 +1061,21 @@ function InfiniteCanvasPage() {
             ];
         });
 
+        const externalIncomingConnections = (clipboard.externalIncoming || []).flatMap((connection, index) => {
+            const toNodeId = idMap.get(connection.toNodeId);
+            if (!toNodeId) return [];
+            if (!nodesRef.current.some((node) => node.id === connection.fromNodeId)) return [];
+            return [
+                {
+                    ...connection,
+                    id: `conn-${Date.now()}-ext-${index}-${Math.random().toString(36).slice(2, 7)}`,
+                    toNodeId,
+                },
+            ];
+        });
+
         setNodes((prev) => [...prev, ...pastedNodes]);
-        setConnections((prev) => [...prev, ...nextConnections]);
+        setConnections((prev) => [...prev, ...nextConnections, ...externalIncomingConnections]);
         setSelectedNodeIds(new Set(pastedNodes.map((node) => node.id)));
         setSelectedConnectionId(null);
         setContextMenu(null);
@@ -1533,7 +1560,24 @@ function InfiniteCanvasPage() {
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             const target = event.target instanceof Element ? event.target : null;
-            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement || target?.closest("[contenteditable='true'],[data-canvas-no-zoom],[data-canvas-shortcuts-ignore]")) return;
+            const isTypingTarget = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement || target?.closest("[contenteditable='true']");
+            if (isTypingTarget) return;
+
+            // 删除快捷键允许焦点位于 data-canvas-no-zoom 元素（点击节点后焦点常落在节点内部的视频/面板上）
+            if ((event.key === "Delete" || event.key === "Backspace") && !target?.closest("[data-canvas-shortcuts-ignore]")) {
+                if (selectedNodeIdsRef.current.size) {
+                    event.preventDefault();
+                    deleteNodes(new Set(selectedNodeIdsRef.current));
+                    return;
+                }
+                if (selectedConnectionId) {
+                    event.preventDefault();
+                    deleteConnection(selectedConnectionId);
+                    return;
+                }
+            }
+
+            if (target?.closest("[data-canvas-no-zoom],[data-canvas-shortcuts-ignore]")) return;
 
             const key = event.key.toLowerCase();
             const isModifierShortcut = event.metaKey || event.ctrlKey;
@@ -1587,14 +1631,6 @@ function InfiniteCanvasPage() {
                 event.preventDefault();
                 if (!pasteCopiedNodes()) void pasteSystemClipboard();
                 return;
-            }
-
-            if (event.key === "Delete" || event.key === "Backspace") {
-                if (selectedNodeIdsRef.current.size) {
-                    deleteNodes(new Set(selectedNodeIdsRef.current));
-                } else if (selectedConnectionId) {
-                    deleteConnection(selectedConnectionId);
-                }
             }
 
             if (event.key === "Escape") {
@@ -2300,6 +2336,7 @@ function InfiniteCanvasPage() {
                         ? await requestEdit({ ...generationConfig, count: "1" }, context.prompt, refs, { signal: controller.signal }).then((items) => items[0])
                         : await requestGeneration({ ...generationConfig, count: "1" }, context.prompt, { signal: controller.signal }).then((items) => items[0]);
                     const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
+                    void saveToOutputFolder("image", uploaded.url, uploaded.mimeType?.includes("jpeg") ? "jpg" : "png");
                     setNodes((prev) =>
                         prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...imageMetadata(uploaded), prompt: scene, model: generationConfig.model, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)),
                     );
@@ -2425,6 +2462,7 @@ function InfiniteCanvasPage() {
                                     ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, { signal: controller.signal }).then((items) => items[0])
                                     : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal }).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
+                                void saveToOutputFolder("image", uploaded.url, uploaded.mimeType?.includes("jpeg") ? "jpg" : "png");
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                                 const item: CanvasNodeImage = { id: imageId, status: NODE_STATUS_SUCCESS, content: uploaded.url, storageKey: uploaded.storageKey, naturalWidth: uploaded.width, naturalHeight: uploaded.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType };
                                 setNodes((prev) =>
